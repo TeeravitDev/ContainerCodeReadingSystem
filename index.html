@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ระบบ OCR เลือกครอบภาพหลายส่วนพร้อมแปลง JSON</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Cropper.js CSS CDN -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.css" />
+    <style>
+        /* กำหนดรูปแบบการแสดงผลของ Cropper Container */
+        .img-container {
+            min-height: 400px;
+            max-width: 100%;
+            background-color: #f7f7f7;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            position: relative;
+            overflow: hidden;
+            border-radius: 0.5rem;
+            box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.06);
+        }
+        /* รูปภาพภายใน Cropper ต้องมี max-width: 100% */
+        #imageToCrop {
+            max-width: 100%;
+            display: block; 
+        }
+        /* ปรับสไตล์ของ Textarea ผลลัพธ์ */
+        #ocrResult {
+            min-height: 150px;
+            width: 100%;
+            padding: 0.75rem; /* p-3 */
+            border-radius: 0.375rem; /* rounded-md */
+            box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.07); /* shadow-inner */
+            resize: vertical; /* อนุญาตให้ขยายแนวตั้ง */
+            font-family: monospace; /* ใช้ monospace เพื่อให้อ่าน JSON ได้ง่าย */
+        }
+    </style>
+</head>
+<body class="bg-gray-50 p-4 sm:p-8 font-sans">
+
+    <div class="max-w-4xl mx-auto bg-white p-6 rounded-xl shadow-2xl">
+        <h1 class="text-2xl font-extrabold text-blue-800 mb-4 text-center">
+            ระบบตรวจจับและอ่าน Container Code จากภาพที่ครอป (DEMO)
+        </h1>
+        <p class="text-gray-500 mb-6 text-center">
+            อัปโหลดภาพ, ประมวลผล, แก้ไขข้อความ และแปลงเป็นโครงสร้าง JSON ได้.
+        </p>
+
+        <!-- 1. ส่วนควบคุมการอัปโหลดและรีเซ็ต -->
+        <div class="flex flex-col sm:flex-row gap-4 mb-6">
+            <input type="file" id="fileInput" accept="image/*" class="flex-grow p-2 border border-gray-300 rounded-lg text-sm shadow-sm">
+            <button onclick="resetApp()" id="resetButton" 
+                    class="bg-red-500 text-white font-semibold py-2 px-6 rounded-lg shadow-md hover:bg-red-600 transition duration-300">
+                รีเซ็ต
+            </button>
+        </div>
+
+        <!-- 2. พื้นที่แสดงรูปภาพและ Cropper -->
+        <div class="img-container mb-6">
+            <img id="imageToCrop" alt="รูปภาพสำหรับ Crop" style="display:none;">
+            <p id="placeholderText" class="text-gray-400 text-lg absolute">
+                กรุณาอัปโหลดรูปภาพ
+            </p>
+        </div>
+
+        <!-- 3. ส่วนควบคุม Multi-Crop -->
+        <div class="flex flex-col sm:flex-row gap-4 mb-6">
+            <button onclick="saveCropArea()" id="saveCropButton" 
+                    class="flex-grow bg-blue-600 text-white font-semibold py-3 px-6 rounded-lg shadow-md hover:bg-blue-700 transition duration-300 disabled:opacity-50">
+                <span id="saveText">บันทึกส่วนที่เลือก</span> (<span id="cropCount">0</span>)
+            </button>
+            <button onclick="processAllSavedCrops()" id="processAllButton" 
+                    class="flex-grow bg-green-600 text-white font-semibold py-3 px-6 rounded-lg shadow-md hover:bg-green-700 transition duration-300 disabled:opacity-50">
+                ประมวลผล OCR ทั้งหมด
+            </button>
+        </div>
+
+        <!-- 4. รายการพิกัดที่บันทึกไว้ พร้อมปุ่มลบ -->
+        <div class="p-4 bg-gray-100 rounded-lg mb-6">
+            <h3 class="text-md font-semibold text-gray-700 mb-2">ส่วนที่บันทึกไว้:</h3>
+            <ul id="cropList" class="text-sm text-gray-600 space-y-2">
+                <li>ยังไม่มีส่วนที่บันทึก...</li>
+            </ul>
+        </div>
+        
+        <!-- Canvas ที่ซ่อนไว้สำหรับตัดภาพก่อน OCR -->
+        <canvas id="canvasOutput" class="hidden"></canvas>
+
+        <!-- 5. ส่วนแสดงผลลัพธ์ OCR (รวมผลลัพธ์จากทุกส่วน) -->
+        <div class="bg-blue-50 p-4 rounded-lg border border-blue-200">
+            <h3 class="text-xl font-semibold text-blue-700 mb-2">ข้อความที่ถูกแปลง (สามารถแก้ไขได้):</h3>
+            <!-- Textarea สำหรับแก้ไขข้อความ -->
+            <textarea id="ocrResult" class="text-gray-700 bg-white border border-gray-300 text-sm">
+ผลลัพธ์จากทุกส่วนจะปรากฏที่นี่...
+            </textarea>
+            
+            <div class="flex flex-wrap gap-3 mt-3">
+                <!-- 1. ปุ่มคัดลอก -->
+                <button onclick="copyToClipboard()" id="copyButton" 
+                        class="bg-gray-300 text-gray-800 text-sm py-1 px-4 rounded-full hover:bg-gray-400 transition duration-300">
+                    คัดลอกข้อความที่แก้ไขแล้ว
+                </button>
+                
+                <!-- 2. ปุ่มแปลงเป็น JSON -->
+                <button onclick="convertToJSON()" id="convertButton" 
+                        class="bg-purple-500 text-white text-sm py-1 px-4 rounded-full hover:bg-purple-600 transition duration-300 disabled:opacity-50">
+                    📦 แปลงเป็น JSON Object
+                </button>
+                
+                <!-- 3. ปุ่มจำลองการบันทึก -->
+                <button onclick="simulateSave()" id="saveButton" 
+                        class="bg-indigo-500 text-white text-sm py-1 px-4 rounded-full hover:bg-indigo-600 transition duration-300 disabled:opacity-50">
+                    💾 บันทึกข้อมูล (จำลอง)
+                </button>
+            </div>
+            
+        </div>
+
+    </div>
+
+    <!-- Cropper.js JavaScript CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.js"></script>
+    <!-- Tesseract.js JavaScript CDN (OCR Engine) -->
+    <script src="https://unpkg.com/tesseract.js@5.0.3/dist/tesseract.min.js"></script>
+    
+    <!-- Custom Confirmation Modal UI -->
+    <div id="confirmationModal" class="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center hidden">
+        <div class="bg-white rounded-xl shadow-2xl max-w-lg w-full m-4 transform transition-all duration-300 scale-100">
+            <div class="p-6">
+                <h2 id="modalTitle" class="text-2xl font-bold text-gray-800 mb-4 border-b pb-2">ยืนยันการบันทึกข้อมูล</h2>
+                <p class="text-sm text-gray-600 mb-3">โปรดตรวจสอบข้อมูลสรุปที่จะถูกบันทึก:</p>
+                <div id="modalContent" class="text-sm text-gray-700 max-h-96 overflow-y-auto p-4 bg-gray-50 border border-gray-200 rounded-md mb-6">
+                    <!-- Content will be injected here -->
+                </div>
+                <div class="flex justify-end space-x-3">
+                    <button id="modalCancel" class="px-5 py-2 bg-gray-300 text-gray-800 font-semibold rounded-lg hover:bg-gray-400 transition duration-150 shadow-md">
+                        ยกเลิก
+                    </button>
+                    <button id="modalConfirm" class="px-5 py-2 bg-green-600 text-white font-semibold rounded-lg hover:bg-green-700 transition duration-150 shadow-md">
+                        ยืนยันการบันทึก
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Global variables
+        let cropperInstance;
+        let croppedAreas = [];
+        let originalImageSrc = null;
+
+        const fileInput = document.getElementById('fileInput'); 
+        const imgElement = document.getElementById('imageToCrop');
+        const placeholderText = document.getElementById('placeholderText');
+        const ocrResult = document.getElementById('ocrResult');
+        const cropList = document.getElementById('cropList');
+        const saveCropButton = document.getElementById('saveCropButton');
+        const processAllButton = document.getElementById('processAllButton');
+        const cropCount = document.getElementById('cropCount');
+        const saveButton = document.getElementById('saveButton');
+        const convertButton = document.getElementById('convertButton');
+
+        // --- Utility Functions ---
+
+        // Function to update the list of saved crops, now including a delete button
+        function updateCropList() {
+            cropList.innerHTML = '';
+            if (croppedAreas.length === 0) {
+                cropList.innerHTML = '<li class="text-gray-400">ยังไม่มีส่วนที่บันทึก...</li>';
+                cropCount.textContent = '0';
+                processAllButton.disabled = true; // Disable processing if nothing is saved
+            } else {
+                croppedAreas.forEach((area, index) => {
+                    const li = document.createElement('li');
+                    li.className = 'flex items-center justify-between p-2 bg-white rounded-md shadow-sm border border-gray-200';
+                    
+                    const textSpan = document.createElement('span');
+                    textSpan.textContent = `ส่วนที่ ${index + 1}: ${area.width.toFixed(0)}x${area.height.toFixed(0)} px`;
+
+                    const deleteButton = document.createElement('button');
+                    deleteButton.textContent = 'ลบ';
+                    deleteButton.className = 'ml-3 px-3 py-1 text-xs font-semibold text-white bg-red-400 rounded hover:bg-red-500 transition duration-150';
+                    deleteButton.onclick = () => removeCropArea(index);
+
+                    li.appendChild(textSpan);
+                    li.appendChild(deleteButton);
+                    cropList.appendChild(li);
+                });
+                cropCount.textContent = croppedAreas.length;
+                processAllButton.disabled = false;
+            }
+        }
+
+        // Function to remove a crop area by index
+        function removeCropArea(index) {
+            croppedAreas.splice(index, 1);
+            updateCropList();
+            showNotification(`ลบส่วนที่ ${index + 1} ออกจากรายการแล้ว`, 'warning');
+            ocrResult.value = 'ผลลัพธ์จากทุกส่วนจะปรากฏที่นี่...'; // Clear old results
+        }
+
+
+        // Function to show a temporary notification box (instead of alert)
+        function showNotification(message, type = 'success') {
+            const messageElement = document.createElement('div');
+            let bgColor = 'bg-green-500';
+            if (type === 'warning') bgColor = 'bg-yellow-500';
+            if (type === 'error') bgColor = 'bg-red-500';
+
+            messageElement.className = `fixed top-4 right-4 ${bgColor} text-white p-3 rounded-lg shadow-xl transition-opacity duration-500 z-50`;
+            messageElement.textContent = message;
+            document.body.appendChild(messageElement);
+            setTimeout(() => messageElement.remove(), 3000);
+        }
+
+        // --- Confirmation Modal Management ---
+
+        /**
+         * Parses OCR result text to extract structured data for confirmation display.
+         * Handles both raw section-separated text and final JSON format.
+         */
+        function parseOcrForConfirmation(text) {
+            if (text.startsWith('--- [ผลลัพธ์ JSON')) {
+                // If the content is already JSON
+                return {
+                    isJson: true,
+                    displayContent: text.substring(text.indexOf('\n') + 1).trim()
+                };
+            }
+            
+            // Handle raw OCR text separated by sections (--- [ส่วนที่ X] ---)
+            const parts = text.split('\n--- [ส่วนที่');
+            const sections = [];
+            
+            parts.forEach(part => {
+                const match = part.match(/ (\d+)] ---\n([\s\S]*)/);
+                if (match) {
+                    const index = parseInt(match[1].trim());
+                    const content = match[2].trim();
+                    if (content) {
+                        sections.push({ index, content });
+                    }
+                }
+            });
+
+            return {
+                isJson: false,
+                sections: sections
+            };
+        }
+
+        /**
+         * Displays the custom confirmation modal.
+         */
+        function showConfirmationModal(title, contentHtml, onConfirm) {
+            const modal = document.getElementById('confirmationModal');
+            document.getElementById('modalTitle').textContent = title;
+            document.getElementById('modalContent').innerHTML = contentHtml;
+            
+            let confirmButton = document.getElementById('modalConfirm');
+            let cancelButton = document.getElementById('modalCancel');
+
+            // Clone to clear previous event listeners
+            const newConfirmButton = confirmButton.cloneNode(true);
+            confirmButton.parentNode.replaceChild(newConfirmButton, confirmButton);
+            confirmButton = newConfirmButton;
+            
+            const newCancelButton = cancelButton.cloneNode(true);
+            cancelButton.parentNode.replaceChild(newCancelButton, cancelButton);
+            cancelButton = newCancelButton;
+
+            // Set new listeners
+            confirmButton.onclick = () => {
+                modal.classList.add('hidden');
+                onConfirm(); // Execute the save logic
+            };
+            cancelButton.onclick = () => {
+                modal.classList.add('hidden');
+                showNotification('🚫 ยกเลิกการบันทึก', 'warning');
+            };
+            
+            modal.classList.remove('hidden');
+        }
+
+        // --- Core Functions ---
+
+        // Function to perform the simulated save after confirmation
+        function confirmSave(textToSave) {
+            const originalText = saveButton.textContent;
+            saveButton.textContent = 'กำลังจำลองการบันทึก...';
+            saveButton.disabled = true;
+            convertButton.disabled = true;
+
+            // Simulate network delay for a realistic feel
+            setTimeout(() => {
+                saveButton.textContent = originalText;
+                saveButton.disabled = false;
+                convertButton.disabled = false;
+                
+                // Show success notification
+                const snippet = textToSave.length > 30 ? textToSave.substring(0, 30) + '...' : textToSave;
+                showNotification(`✅ จำลองการบันทึกข้อมูลสำเร็จ! ข้อความที่บันทึก: "${snippet}"`, 'success');
+                
+            }, 1000); // 1 second delay
+        }
+
+        // Function to trigger the confirmation modal before saving
+        function simulateSave() {
+            const textToSave = ocrResult.value.trim();
+            
+            if (textToSave.length === 0 || textToSave.includes('ผลลัพธ์จากทุกส่วนจะปรากฏที่นี่') || textToSave.includes('⚙️')) {
+                showNotification("⚠️ ไม่มีข้อความที่พร้อมบันทึก หรือข้อความยังอยู่ในสถานะรอการประมวลผล", 'warning');
+                return;
+            }
+
+            const parsedData = parseOcrForConfirmation(textToSave);
+            let modalHtml = '';
+
+            if (parsedData.isJson) {
+                // Display formatted JSON if already converted
+                modalHtml = `<p class="font-semibold text-red-600 mb-2">ข้อมูลอยู่ในรูปแบบ JSON (โปรดตรวจสอบ):</p><pre class="whitespace-pre-wrap text-xs">${parsedData.displayContent}</pre>`;
+            } else if (parsedData.sections && parsedData.sections.length > 0) {
+                // Display summary of extracted parts
+                modalHtml = '<ul class="space-y-3">';
+                parsedData.sections.forEach(section => {
+                    modalHtml += `<li class="border-b border-gray-200 pb-3">
+                        <p class="font-bold text-blue-700">ส่วนที่ ${section.index}:</p>
+                        <p class="text-sm italic whitespace-pre-wrap">${section.content.substring(0, 150)}${section.content.length > 150 ? '...' : ''}</p>
+                    </li>`;
+                });
+                modalHtml += '</ul>';
+            } else {
+                // Fallback for general text that doesn't fit the pattern
+                modalHtml = `<p class="font-semibold text-red-600 mb-2">ข้อความที่จะบันทึก (เป็นข้อความทั่วไป):</p><pre class="whitespace-pre-wrap text-xs">${textToSave.substring(0, 500)}${textToSave.length > 500 ? '...' : ''}</pre>`;
+            }
+
+            // Show the modal with the confirmation function as the callback
+            showConfirmationModal('ยืนยันการบันทึกข้อมูลที่แปลงแล้ว', modalHtml, () => confirmSave(textToSave));
+        }
+
+
+        // --- Other App Logic (File Input, Cropping, OCR, JSON Conversion) ---
+
+        document.getElementById('fileInput').addEventListener('change', function (e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            // Reset necessary state for new image upload
+            croppedAreas = [];
+            updateCropList();
+            ocrResult.value = 'ผลลัพธ์จากทุกส่วนจะปรากฏที่นี่...';
+            placeholderText.style.display = 'none';
+
+            // Read file as Data URL
+            const reader = new FileReader();
+            reader.onload = function (event) {
+                originalImageSrc = event.target.result;
+                imgElement.src = originalImageSrc;
+                imgElement.style.display = 'block';
+
+                if (cropperInstance) {
+                    cropperInstance.destroy();
+                }
+
+                // Initialize new Cropper instance
+                cropperInstance = new Cropper(imgElement, {
+                    aspectRatio: NaN, 
+                    viewMode: 1,      
+                    dragMode: 'move', 
+                    autoCropArea: 0.8 
+                });
+            };
+            reader.readAsDataURL(file);
+        });
+
+        // Function to save the current crop area
+        function saveCropArea() {
+            if (!cropperInstance) {
+                showNotification("❌ กรุณาอัปโหลดรูปภาพก่อน", 'error');
+                return;
+            }
+
+            const cropData = cropperInstance.getData(true);
+            
+            if (cropData.width < 10 || cropData.height < 10) {
+                showNotification("⚠️ กรุณาเลือกพื้นที่ที่ต้องการครอบที่มีขนาดพอเหมาะ", 'warning');
+                return;
+            }
+
+            croppedAreas.push(cropData);
+            updateCropList();
+            showNotification(`✅ บันทึกส่วนที่ ${croppedAreas.length} เรียบร้อยแล้ว`);
+        }
+
+        // Function to process all saved crop areas sequentially
+        async function processAllSavedCrops() {
+            if (croppedAreas.length === 0) {
+                showNotification("❌ กรุณาบันทึกส่วนที่ต้องการแปลงอย่างน้อย 1 ส่วน", 'error');
+                return;
+            }
+
+            // Disable buttons and show loading state
+            saveCropButton.disabled = true;
+            processAllButton.disabled = true;
+            convertButton.disabled = true;
+            processAllButton.textContent = 'กำลังประมวลผลทั้งหมด...';
+            ocrResult.value = '⚙️ กำลังประมวลผล OCR...';
+
+            let combinedText = '';
+            
+            try {
+                // Initialize Tesseract Worker once outside the loop
+                const worker = await Tesseract.createWorker('eng'); 
+                
+                for (let i = 0; i < croppedAreas.length; i++) {
+                    const cropData = croppedAreas[i];
+                    ocrResult.value = `⚙️ กำลังประมวลผลส่วนที่ ${i + 1} จาก ${croppedAreas.length}...`;
+                    
+                    // 1. Prepare Canvas for client-side cropping
+                    const canvas = document.getElementById('canvasOutput');
+                    const ctx = canvas.getContext('2d');
+                    
+                    canvas.width = cropData.width;
+                    canvas.height = cropData.height;
+
+                    // 2. Perform the crop on the canvas
+                    const image = new Image();
+                    image.src = originalImageSrc;
+                    
+                    // Wait for the image to load completely before drawing
+                    await new Promise(resolve => image.onload = resolve);
+                    
+                    ctx.drawImage(
+                        image, 
+                        cropData.x, cropData.y, cropData.width, cropData.height, 
+                        0, 0, cropData.width, cropData.height
+                    );
+
+                    // 3. Convert cropped image to Data URL
+                    const croppedDataUrl = canvas.toDataURL('image/png');
+                    
+                    // 4. Run OCR on the current cropped section
+                    const { data: { text } } = await worker.recognize(croppedDataUrl);
+                    
+                    const cleanedText = text.trim();
+                    combinedText += `\n--- [ส่วนที่ ${i + 1}] ---\n${cleanedText}\n`;
+                }
+                
+                // Terminate worker when done
+                await worker.terminate();
+
+                // 5. Display combined result
+                ocrResult.value = `--- [สรุปผลลัพธ์] ---\n${combinedText.trim()}`;
+                
+            } catch (error) {
+                console.error("OCR Error:", error);
+                ocrResult.value = `❌ เกิดข้อผิดพลาดในการประมวลผล: ${error.message}`;
+            } finally {
+                // Re-enable buttons
+                saveCropButton.disabled = false;
+                processAllButton.disabled = false;
+                convertButton.disabled = false;
+                processAllButton.textContent = 'ประมวลผล OCR ทั้งหมด';
+            }
+        }
+
+        // Function to copy text to clipboard (now uses textarea value)
+        function copyToClipboard() {
+            const textToCopy = ocrResult.value.trim();
+            if (textToCopy.length === 0 || textToCopy.includes('❌') || textToCopy.includes('⚙️') || textToCopy.includes('ผลลัพธ์จากทุกส่วนจะปรากฏที่นี่')) {
+                showNotification("ไม่มีข้อความที่พร้อมคัดลอก หรือข้อความยังอยู่ในสถานะรอการประมวลผล", 'warning');
+                return;
+            }
+            
+            // Select the text in the textarea for copying
+            ocrResult.select();
+            
+            try {
+                document.execCommand('copy');
+                showNotification('คัดลอกข้อความที่แก้ไขแล้วสำเร็จ!');
+            } catch (err) {
+                console.error('Could not copy text: ', err);
+                showNotification('ไม่สามารถคัดลอกข้อความได้', 'error');
+            }
+        }
+        
+        // --- JSON Conversion Function (Uses Gemini API) ---
+        async function convertToJSON() {
+            const textToConvert = ocrResult.value.trim();
+            
+            if (textToConvert.length < 10 || textToConvert.includes('ผลลัพธ์จากทุกส่วนจะปรากฏที่นี่') || textToConvert.includes('⚙️')) {
+                showNotification("⚠️ ข้อความสั้นเกินไปหรือยังไม่ได้ประมวลผล", 'warning');
+                return;
+            }
+
+            const originalText = ocrResult.value;
+            ocrResult.value = '⚙️ กำลังประมวลผลเพื่อแปลงเป็น JSON...';
+            saveButton.disabled = true;
+            convertButton.disabled = true;
+            const originalConvertText = convertButton.textContent;
+            convertButton.textContent = '📦 กำลังแปลง...';
+
+            try {
+                // 1. Define LLM Configuration
+                const systemPrompt = "You are a data parser. Your task is to analyze the provided OCR text, which is separated into sections (e.g., '--- [ส่วนที่ X] ---'). Convert this structured text into a single, valid JSON array of objects. The output must ONLY be the JSON object string. Each object in the array must represent one section and contain 'part_index' (number) and 'content' (string) which holds the text of that section.";
+                
+                const payload = {
+                    contents: [{ parts: [{ text: textToConvert }] }],
+                    systemInstruction: { parts: [{ text: systemPrompt }] },
+                    generationConfig: {
+                        responseMimeType: "application/json",
+                        responseSchema: {
+                            type: "ARRAY",
+                            items: {
+                                type: "OBJECT",
+                                properties: {
+                                    "part_index": { "type": "NUMBER", "description": "The sequential number of the crop part extracted from the text, e.g., 1, 2, 3." },
+                                    "content": { "type": "STRING", "description": "The raw text content of that specific part." }
+                                },
+                                "required": ["part_index", "content"]
+                            }
+                        }
+                    }
+                };
+
+                const apiKey = ""; 
+                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+                
+                // 2. Make API call with retry logic
+                const maxRetries = 3;
+                let attempt = 0;
+                let response;
+                
+                while (attempt < maxRetries) {
+                    try {
+                        response = await fetch(apiUrl, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+
+                        if (!response.ok) {
+                            const errorDetails = await response.text();
+                            console.error(`Attempt ${attempt + 1}: API call failed with status ${response.status}. Details: ${errorDetails}`);
+                            throw new Error(`API failed: ${response.statusText}`);
+                        }
+                        break; // Success
+                    } catch (e) {
+                        attempt++;
+                        if (attempt >= maxRetries) throw e;
+                        const delay = Math.pow(2, attempt) * 1000;
+                        await new Promise(resolve => setTimeout(resolve, delay));
+                    }
+                }
+                
+                // 3. Process Response
+                const result = await response.json();
+                const candidate = result.candidates?.[0];
+
+                if (candidate && candidate.content?.parts?.[0]?.text) {
+                    const jsonString = candidate.content.parts[0].text;
+                    const parsedJson = JSON.parse(jsonString);
+                    
+                    // Display JSON in the textarea, formatted nicely
+                    ocrResult.value = `--- [ผลลัพธ์ JSON (สามารถคัดลอกได้)] ---\n${JSON.stringify(parsedJson, null, 2)}`;
+                    showNotification('✅ แปลงเป็น JSON Object สำเร็จ', 'success');
+
+                } else {
+                    throw new Error("No structured content returned by the model.");
+                }
+            } catch (error) {
+                console.error("JSON Conversion Error:", error);
+                ocrResult.value = originalText; // Restore original text
+                showNotification(`❌ แปลง JSON ไม่สำเร็จ: ${error.message}. ข้อความเดิมถูกคืนค่า`, 'error');
+            } finally {
+                // 4. Reset Button States
+                saveButton.disabled = false;
+                convertButton.disabled = false;
+                convertButton.textContent = originalConvertText;
+            }
+        }
+        
+        // --- Reset Function ---
+        function resetApp() {
+            // 1. Reset Cropping State
+            if (cropperInstance) {
+                cropperInstance.destroy();
+                cropperInstance = null;
+            }
+            croppedAreas = [];
+            updateCropList();
+
+            // 2. Reset UI Elements
+            fileInput.value = ''; // Clear file input
+            imgElement.style.display = 'none';
+            imgElement.src = ''; // Clear image source
+            placeholderText.style.display = 'block';
+            ocrResult.value = 'ผลลัพธ์จากทุกส่วนจะปรากฏที่นี่...'; // Reset textarea value
+            
+            // 3. Reset Button States
+            processAllButton.disabled = true;
+            saveCropButton.disabled = false;
+            processAllButton.textContent = 'ประมวลผล OCR ทั้งหมด';
+
+            showNotification("✅ ระบบถูกรีเซ็ตเรียบร้อยแล้ว", 'success');
+        }
+
+    </script>
+</body>
+</html>
